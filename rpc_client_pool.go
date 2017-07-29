@@ -4,6 +4,12 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"errors"
+	"log"
+	"io"
+)
+
+var (
+	ERR_FATAL error = errors.New("Fatal error.")
 )
 
 type ConnEndpointInfo struct {
@@ -18,14 +24,16 @@ type RpcClientPool struct {
 	conn_pool chan *grpc.ClientConn
 	conn_endpoints map[*grpc.ClientConn] int
 	endpoints_map map[int] ConnEndpointInfo
-	logr *LogUtil
+	elog *log.Logger
+	ilog *log.Logger
 	pool_created bool
 }
 
 func (r *RpcClientPool) createPool(endpoints []ConnEndpointInfo, conn_per_ep int) error {
 
 	if len(endpoints) == 0 || conn_per_ep == 0 {
-		return r.logr.Error(errors.New(INVALID_REQ), "Failed creating conn pool.")
+		r.elog.Println("Failed creating conn pool.")
+		return ERR_FATAL
 	}
 
 	r.conn_endpoints = make(map[*grpc.ClientConn] int, conn_per_ep * len(endpoints))
@@ -37,16 +45,17 @@ func (r *RpcClientPool) createPool(endpoints []ConnEndpointInfo, conn_per_ep int
 		for j := 0; j < conn_per_ep; j++ {
 			new_conn, err := r.newRPCConn(endpoints[i])
 			if err != nil {
-				r.logr.Error(err, "Failed creating connection Ep: %+v.", endpoints[i])
+				r.elog.Printf("Failed creating connection Ep: %+v. Err:%s\n", endpoints[i], err.Error())
 				continue
 			}
 			r.conn_endpoints[new_conn] = i
 			r.Put(new_conn)
-			r.logr.Info("Successfully created new connection to Ep:%+v", endpoints[i])
+			r.ilog.Printf("Successfully created new connection to Ep:%+v\n", endpoints[i])
 		}
 	}
 	if len(r.conn_endpoints) == 0 {
-		return r.logr.Error(errors.New(FATAL_ERROR), "Failed creating any connection.")
+		r.elog.Println("Failed creating any connection.")
+		return ERR_FATAL
 	}
 	r.pool_created = true
 	return nil
@@ -60,12 +69,13 @@ func (r *RpcClientPool) newRPCConn(ep ConnEndpointInfo) (*grpc.ClientConn, error
 		if ep.ServerHostOverride != "" {
 			sn = ep.ServerHostOverride
 		}
-		var creds credentials.TransportAuthenticator
+		var creds credentials.TransportCredentials
 		if ep.CertFile != "" {
 			var err error
 			creds, err = credentials.NewClientTLSFromFile(ep.CertFile, sn)
 			if err != nil {
-				return nil, r.logr.Error(err, "Failed to create TLS credentials.")
+				r.elog.Printf("Failed to create TLS credentials. ERR:%s\n", err.Error())
+				return nil, err
 			}
 		} else {
 			creds = credentials.NewClientTLSFromCert(nil, sn)
@@ -76,27 +86,33 @@ func (r *RpcClientPool) newRPCConn(ep ConnEndpointInfo) (*grpc.ClientConn, error
 	}
 	conn, err := grpc.Dial(ep.ServerAddr, opts...)
 	if err != nil {
-		return nil, r.logr.Error(err, "Failed to dial.")
+		r.elog.Printf("Failed to dial. ERR:%s\n", err.Error())
+		return nil, err
 	}
-	r.logr.Info("Established new RPC connection to %s.", ep.ServerAddr)
+	r.ilog.Printf("Established new RPC connection to %s.\n", ep.ServerAddr)
 	return conn, nil
 }
 
 func NewRpcClientPool(do_heartbeat func(*grpc.ClientConn) error, endpoints []ConnEndpointInfo,
-		      conn_per_ep int, logr *LogUtil) *RpcClientPool {
+		      conn_per_ep int, logr_op io.Writer) *RpcClientPool {
 	client_pool := new(RpcClientPool)
 	client_pool.doHeartBeat = do_heartbeat
-	client_pool.logr = logr
+	client_pool.initLogger(logr_op)
 	if err := client_pool.createPool(endpoints, conn_per_ep); err != nil {
-		_ = client_pool.logr.Error(err, "Failed to create RPC pool.")
+		client_pool.elog.Printf("Failed to create RPC pool. ERR:%s\n", err.Error())
 		return nil
 	}
 	return client_pool
 }
 
+func (r *RpcClientPool) initLogger(logger_op io.Writer)  {
+	r.elog = log.New(logger_op, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile)
+	r.ilog = log.New(logger_op, "INFO\t", log.Ldate|log.Ltime|log.Lshortfile)
+}
+
 func (r *RpcClientPool) Get() *grpc.ClientConn {
 	if len(r.conn_endpoints) == 0 {
-		r.logr.Error(errors.New(FATAL_ERROR), "No more connections in map.")
+		r.elog.Println("No more connections in map.")
 		return nil
 	}
 	var conn *grpc.ClientConn
@@ -107,7 +123,7 @@ func (r *RpcClientPool) Get() *grpc.ClientConn {
 			delete(r.conn_endpoints, conn)
 			conn, err = r.newRPCConn(r.endpoints_map[ep])
 			if err != nil {
-				_ = r.logr.Error(err, "Failed to re-establish connection. Ep:%+v", ep)
+				r.elog.Printf("Failed to re-establish connection. Ep:%+v ERR:%s\n", ep, err.Error())
 				// Try to get another connection.
 				return r.Get()
 			}
