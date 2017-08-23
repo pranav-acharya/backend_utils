@@ -2,12 +2,13 @@ package backend_utils
 
 import (
 	"net/smtp"
-	"html/template"
+	"text/template"
 	"github.com/aloknerurkar/task-runner"
 	"os"
 	"fmt"
 	"bytes"
 	"time"
+	tpl "html/template"
 )
 
 type EmailConf struct {
@@ -25,11 +26,11 @@ type MailerDaemon struct {
 }
 
 var emailScript = `From: {{.From}}
-		   To: {{.To}}
-		   Subject: {{.Subject}}
-		   MIME-version: 1.0
-		   Content-Type: text/html; charset="UTF-8"
-		   <html><body>{{.Message}}</body></html>`
+To: {{.To}}
+Subject: {{.Subject}}
+MIME-version: 1.0
+Content-Type: text/html; charset="UTF-8"
+<html><body>{{.Message}}</body></html>`
 
 func NewMailerDaemon(host, username, password string, port int) *MailerDaemon {
 
@@ -48,10 +49,10 @@ func NewMailerDaemon(host, username, password string, port int) *MailerDaemon {
 
 func (s *MailerDaemon) SendEmail(to, subject, message string, args... interface{}) {
 	task := NewEmailSendTask(taskParams{
-		From: s.conf.UserName,
+		From: "no-reply@kuber.com",
 		To: to,
 		Subject: subject,
-		Message: fmt.Sprintf(message, args...),
+		Message: tpl.HTML(fmt.Sprintf(message, args...)),
 	}, s)
 
 	s.runner.EnqueueTask(task)
@@ -61,7 +62,7 @@ type taskParams struct {
 	From    string
 	To      string
 	Subject string
-	Message string
+	Message tpl.HTML
 }
 
 type emailTask struct {
@@ -83,7 +84,7 @@ func (t *emailTask) Execute() {
 	t.sndr.conf.Template.Execute(&emailMessage, &t.params)
 
 	err := smtp.SendMail(fmt.Sprintf("%s:%d", t.sndr.conf.Host, t.sndr.conf.Port), t.sndr.conf.Auth,
-		t.sndr.conf.UserName, []string{t.params.To}, emailMessage.Bytes())
+		t.params.From, []string{t.params.To}, emailMessage.Bytes())
 
 	if err != nil && t.tries > 0 {
 		t.tries--
