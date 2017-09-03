@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"net"
 	"errors"
+	"os/exec"
 )
 
 // Generic Errors
@@ -112,4 +113,39 @@ func ExternalIP() (string, error) {
 		}
 	}
 	return "", errors.New("are you connected to the network?")
+}
+
+type CmdResult struct {
+	Err error
+	StdOut string
+	StdErr string
+}
+
+func (c *CmdResult) String() string {
+	var result string
+	if c.Err != nil {
+		result += fmt.Sprintf("ERR:%s ", c.Err.Error())
+	}
+	result += fmt.Sprintf("StdOut:%s ", c.StdOut)
+	result += fmt.Sprintf("StdErr:%s ", c.StdErr)
+	return result
+}
+
+func ExecCommand(name string, args... interface{}) (result *CmdResult) {
+
+	result = new(CmdResult)
+	cmd := exec.Command(name, args...)
+
+	var stdOut, stdErr bytes.Buffer
+	cmd.Stdout = &stdOut
+	cmd.Stderr = &stdErr
+
+	result.Err = cmd.Run()
+	if result.Err != nil {
+		return
+	}
+
+	result.StdOut = stdOut.String()
+	result.StdErr = stdErr.String()
+	return
 }
