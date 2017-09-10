@@ -35,43 +35,43 @@ import (
 
 // Not all of the above errors are implemented. Add them as and when required.
 var (
-	ErrUnknown = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.Unknown, msg, args...)
+	ErrUnknown = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.Unknown, msg, args...)
 	}
 
-	ErrInvalidArg = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.InvalidArgument, msg, args...)
+	ErrInvalidArg = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.InvalidArgument, msg, args...)
 	}
 
-	ErrNotFound = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.NotFound, msg, args...)
+	ErrNotFound = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.NotFound, msg, args...)
 	}
 
-	ErrAlreadyExists = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.AlreadyExists, msg, args...)
+	ErrAlreadyExists = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.AlreadyExists, msg, args...)
 	}
 
-	ErrResourceExhausted = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.ResourceExhausted, msg, args...)
+	ErrResourceExhausted = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.ResourceExhausted, msg, args...)
 	}
 
-	ErrPermissionDenied = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.PermissionDenied, msg, args...)
+	ErrPermissionDenied = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.PermissionDenied, msg, args...)
 	}
 
-	ErrUnauthenticated = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.Unauthenticated, msg, args...)
+	ErrUnauthenticated = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.Unauthenticated, msg, args...)
 	}
 
-	ErrInternal = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.Internal, msg, args...)
+	ErrInternal = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.Internal, msg, args...)
 	}
 
-	ErrUnimplemented = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.Unimplemented, msg, args...)
+	ErrUnimplemented = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.Unimplemented, msg, args...)
 	}
 
-	ErrUnavailable = func(msg string, args... interface{}) *status.Status {
-		return status.Newf(codes.Unavailable, msg, args...)
+	ErrUnavailable = func(msg string, args... interface{}) error {
+		return status.Errorf(codes.Unavailable, msg, args...)
 	}
 )

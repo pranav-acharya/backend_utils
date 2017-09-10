@@ -20,6 +20,10 @@ type EmailConf struct {
 	Template *template.Template
 }
 
+type MailerDaemonType interface {
+	SendEmail(to, subject, message string, args... interface{})
+}
+
 type MailerDaemon struct {
 	conf *EmailConf
 	runner *task_runner.TaskRunner

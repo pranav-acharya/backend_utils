@@ -131,7 +131,7 @@ func (c *CmdResult) String() string {
 	return result
 }
 
-func ExecCommand(name string, args... interface{}) (result *CmdResult) {
+func ExecCommand(name string, args... string) (result *CmdResult) {
 
 	result = new(CmdResult)
 	cmd := exec.Command(name, args...)
