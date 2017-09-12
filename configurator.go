@@ -26,7 +26,7 @@ type GrpcServerConfig struct {
 	// Use JWT based authentication
 	UseJwt		bool	`json:"use_jwt"`
 	PubKeyFile	string	`json:"pub_key"`
-	PrivKeyFile	string	`json:"pub_key"`
+	PrivKeyFile	string	`json:"priv_key"`
 
 	UseValidator	bool	`json:"use_validator"`
 	Port		int32	`json:"port"`
