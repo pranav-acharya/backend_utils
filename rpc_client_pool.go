@@ -2,10 +2,14 @@ package backend_utils
 
 import (
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"errors"
 	"log"
 	"io"
+)
+
+const (
+	PKG_NAME = "RpcClientPool"
+	VERSION = "1.1"
 )
 
 var (
@@ -23,13 +27,13 @@ type RpcClientPool struct {
 	doHeartBeat func(*grpc.ClientConn) error
 	conn_pool chan *grpc.ClientConn
 	conn_endpoints map[*grpc.ClientConn] int
-	endpoints_map map[int] ConnEndpointInfo
+	endpoints_map map[int] interface{}
 	elog *log.Logger
 	ilog *log.Logger
 	pool_created bool
 }
 
-func (r *RpcClientPool) createPool(endpoints []ConnEndpointInfo, conn_per_ep int) error {
+func (r *RpcClientPool) createPool(endpoints []interface{}, conn_per_ep int) error {
 
 	if len(endpoints) == 0 || conn_per_ep == 0 {
 		r.elog.Println("Failed creating conn pool.")
@@ -38,7 +42,7 @@ func (r *RpcClientPool) createPool(endpoints []ConnEndpointInfo, conn_per_ep int
 
 	r.conn_endpoints = make(map[*grpc.ClientConn] int, conn_per_ep * len(endpoints))
 	r.conn_pool = make(chan *grpc.ClientConn, conn_per_ep * len(endpoints))
-	r.endpoints_map = make(map[int] ConnEndpointInfo, len(endpoints))
+	r.endpoints_map = make(map[int] interface{}, len(endpoints))
 
 	for i := range endpoints {
 		r.endpoints_map[i] = endpoints[i]
@@ -61,39 +65,49 @@ func (r *RpcClientPool) createPool(endpoints []ConnEndpointInfo, conn_per_ep int
 	return nil
 }
 
-func (r *RpcClientPool) newRPCConn(ep ConnEndpointInfo) (*grpc.ClientConn, error) {
+func (r *RpcClientPool) newRPCConn(ep interface{}) (*grpc.ClientConn, error) {
 
-	var opts []grpc.DialOption
-	if ep.Tls {
-		var sn string
-		if ep.ServerHostOverride != "" {
-			sn = ep.ServerHostOverride
+	var (
+		opts []grpc.DialOption
+		cli *GrpcClientConfig
+	)
+
+	switch ep.(type) {
+	case ConnEndpointInfo:
+		cli = &GrpcClientConfig{
+			UseTls: ep.(ConnEndpointInfo).Tls,
+			ServerHostOverride: ep.(ConnEndpointInfo).ServerHostOverride,
+			ServerAddr: ep.(ConnEndpointInfo).ServerAddr,
+			UseJwt: false,
 		}
-		var creds credentials.TransportCredentials
-		if ep.CertFile != "" {
-			var err error
-			creds, err = credentials.NewClientTLSFromFile(ep.CertFile, sn)
-			if err != nil {
-				r.elog.Printf("Failed to create TLS credentials. ERR:%s\n", err.Error())
-				return nil, err
-			}
-		} else {
-			creds = credentials.NewClientTLSFromCert(nil, sn)
+		break
+	case GrpcClientConfig:
+		cli = &GrpcClientConfig{
+			UseTls: ep.(GrpcClientConfig).UseTls,
+			ServerHostOverride: ep.(GrpcClientConfig).ServerHostOverride,
+			ServerAddr: ep.(GrpcClientConfig).ServerAddr,
+			UseJwt: ep.(GrpcClientConfig).UseJwt,
+			JwtToken: ep.(GrpcClientConfig).JwtToken,
 		}
-		opts = append(opts, grpc.WithTransportCredentials(creds))
-	} else {
-		opts = append(opts, grpc.WithInsecure())
+		break
 	}
-	conn, err := grpc.Dial(ep.ServerAddr, opts...)
+
+	opts, err := cli.GetClientOpts()
+	if err != nil {
+		r.elog.Printf("Failed to get client options. ERR:%s\n", err.Error())
+	}
+
+	conn, err := grpc.Dial(cli.ServerAddr, opts...)
 	if err != nil {
 		r.elog.Printf("Failed to dial. ERR:%s\n", err.Error())
 		return nil, err
 	}
-	r.ilog.Printf("Established new RPC connection to %s.\n", ep.ServerAddr)
+
+	r.ilog.Printf("Established new RPC connection to %s.\n", cli.ServerAddr)
 	return conn, nil
 }
 
-func NewRpcClientPool(do_heartbeat func(*grpc.ClientConn) error, endpoints []ConnEndpointInfo,
+func NewRpcClientPool(do_heartbeat func(*grpc.ClientConn) error, endpoints []interface{},
 		      conn_per_ep int, logr_op io.Writer) *RpcClientPool {
 	client_pool := new(RpcClientPool)
 	client_pool.doHeartBeat = do_heartbeat
@@ -106,8 +120,11 @@ func NewRpcClientPool(do_heartbeat func(*grpc.ClientConn) error, endpoints []Con
 }
 
 func (r *RpcClientPool) initLogger(logger_op io.Writer)  {
-	r.elog = log.New(logger_op, "ERROR\t", log.Ldate|log.Ltime|log.Lshortfile)
-	r.ilog = log.New(logger_op, "INFO\t", log.Ldate|log.Ltime|log.Lshortfile)
+	err_prefix := PKG_NAME + ":" + VERSION + "\tERROR\t"
+	info_prefix := PKG_NAME + ":" + VERSION + "\tINFO\t"
+
+	r.elog = log.New(logger_op, err_prefix, log.Ldate|log.Ltime|log.Lshortfile)
+	r.ilog = log.New(logger_op, info_prefix, log.Ldate|log.Ltime|log.Lshortfile)
 }
 
 func (r *RpcClientPool) Get() *grpc.ClientConn {

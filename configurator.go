@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"google.golang.org/grpc/metadata"
 	"github.com/grpc-ecosystem/go-grpc-middleware/auth"
+	"database/sql"
+	"errors"
 )
 
 type GrpcServerConfig struct {
@@ -45,8 +47,13 @@ type GrpcClientConfig struct {
 	UseTls 			bool	`json:"use_tls"`
 	CertFile 		string	`json:"cert_file"`
 
+	UseJwt			bool	`json:"use_jwt"`
+
 	ServerHostOverride 	string	`json:"server_host_override"`
 	ServerAddr 		string	`json:"server_addr"`
+
+	// Non-json fields
+	JwtToken		string
 }
 
 type PostgresDBConfig struct {
@@ -64,9 +71,10 @@ type EmailerConfig struct {
 
 type Configurations struct {
 	ServerConfig	GrpcServerConfig 	`json:"server_config"`
-	ClientConfig 	[]GrpcServerConfig	`json:"client_config"`
+	ClientConfig 	[]GrpcClientConfig	`json:"client_config"`
 	PostgresDB	PostgresDBConfig	`json:"postgres_db"`
 	Emailer		EmailerConfig		`json:"emailer"`
+	AuthConfig 	GrpcClientConfig	`json:"auth_config"`
 }
 
 func ReadConfFile(file_path string) (*Configurations, error) {
@@ -213,4 +221,116 @@ func (c *Configurations) GetServerOpts() ([]grpc.ServerOption, error) {
 	}
 
 	return opts, nil
+}
+
+func (c *Configurations) WithJWTToken(token string) {
+
+	if c.ClientConfig == nil {
+		log.Fatal("Grpc Client config not specified.")
+	}
+
+	token_set := false
+	for i := range c.ClientConfig {
+		if c.ClientConfig[i].UseJwt {
+			c.ClientConfig[i].JwtToken = token
+			token_set = true
+		}
+	}
+
+	if !token_set {
+		log.Fatal("No client with JWT enabled.")
+	}
+}
+
+type JwtCredentials struct {
+	credentials.PerRPCCredentials
+	token string
+}
+
+func NewJwtCredentials(tok string) *JwtCredentials {
+	creds := new(JwtCredentials)
+	creds.token = tok
+	return creds
+}
+
+// GetRequestMetadata gets the current request metadata
+func (j *JwtCredentials) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+
+	return map[string]string{
+		"authorization": j.token,
+	}, nil
+}
+
+// Jwt does not RequireTransportSecurity
+func (j *JwtCredentials) RequireTransportSecurity() bool { return false }
+
+func (c *GrpcClientConfig) GetClientOpts() ([]grpc.DialOption, error) {
+
+	var opts []grpc.DialOption
+	if c.UseTls {
+		var sn string
+		if c.ServerHostOverride != "" {
+			sn = c.ServerHostOverride
+		}
+
+		var creds credentials.TransportCredentials
+		if c.CertFile != "" {
+			var err error
+			creds, err = credentials.NewClientTLSFromFile(c.CertFile, sn)
+			if err != nil {
+				log.Printf("Failed to create TLS credentials. ERR:%s\n", err.Error())
+				return nil, err
+			}
+		} else {
+			creds = credentials.NewClientTLSFromCert(nil, sn)
+		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
+	}
+
+	if c.UseJwt {
+		opts = append(opts, grpc.WithPerRPCCredentials(NewJwtCredentials(c.JwtToken)))
+	}
+
+	return opts, nil
+}
+
+func (dbConf *PostgresDBConfig) OpenDB() (*sql.DB, error) {
+
+	dbP, err := sql.Open("postgres", "user=" + dbConf.Username + " dbname=" + dbConf.DBName +
+			     " sslmode=disable")
+	if err == nil {
+		// Open doesn't really do anything. Ping is where we will know.
+		err = dbP.Ping()
+	}
+
+	if err != nil {
+		log.Printf("Failed opening DB Err:%s", err.Error())
+		return nil, err
+	}
+
+	return dbP, nil
+}
+
+func (dbConf *PostgresDBConfig) CreatePQDB() (*sql.DB, error) {
+
+	// If DB is already created, Use the same.
+	dbP, err := dbConf.OpenDB()
+	if err == nil {
+		log.Println("DB has already been created.")
+		return dbP, nil
+	}
+
+	cmd_result := ExecCommand("psql", "-U" + dbConf.Username, "-tc CREATE DATABASE " + dbConf.DBName)
+	if cmd_result.Err != nil {
+		log.Printf("Failed executing database create command Err:%s", cmd_result.Err.Error())
+		return nil, cmd_result.Err
+	}
+
+	log.Printf("Database command result: OUT:%s ERR:%s", cmd_result.StdOut, cmd_result.StdErr)
+	if len(cmd_result.StdErr) > 0 {
+		log.Printf("Database create command retured error. %s", cmd_result.StdErr)
+		return nil, errors.New(cmd_result.StdErr)
+	}
+
+	return dbConf.OpenDB()
 }
