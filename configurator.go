@@ -129,7 +129,7 @@ func validateToken(token string, publicKey *rsa.PublicKey) (*jwt.Token, error) {
 	jwtToken, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 			log.Printf("Unexpected signing method: %v", t.Header["alg"])
-			return nil, fmt.Errorf("invalid token")
+			return nil, fmt.Errorf("Invalid token %s", token)
 		}
 		return publicKey, nil
 	})
@@ -264,6 +264,28 @@ func (j *JwtCredentials) GetRequestMetadata(ctx context.Context, uri ...string) 
 // Jwt does not RequireTransportSecurity
 func (j *JwtCredentials) RequireTransportSecurity() bool { return false }
 
+func (c *GrpcClientConfig) WithJWTToken(token string) *GrpcClientConfig {
+	c.JwtToken = token
+	return c
+}
+
+func (c *GrpcClientConfig) NewRPCConn() (*grpc.ClientConn, error) {
+
+	opts, err := c.GetClientOpts()
+	if err != nil {
+		log.Printf("Failed to get client options. ERR:%s\n", err.Error())
+		return nil, err
+	}
+
+	conn, err := grpc.Dial(c.ServerAddr, opts...)
+	if err != nil {
+		log.Printf("Failed to dial. ERR:%s\n", err.Error())
+		return nil, err
+	}
+
+	return conn, nil
+}
+
 func (c *GrpcClientConfig) GetClientOpts() ([]grpc.DialOption, error) {
 
 	var opts []grpc.DialOption
@@ -288,6 +310,10 @@ func (c *GrpcClientConfig) GetClientOpts() ([]grpc.DialOption, error) {
 	}
 
 	if c.UseJwt {
+		if len(c.JwtToken) == 0 {
+			log.Println("Token not specified for JWT.")
+			return nil, errors.New("Token not specified for use of JWT.")
+		}
 		opts = append(opts, grpc.WithPerRPCCredentials(NewJwtCredentials(c.JwtToken)))
 	}
 
