@@ -139,7 +139,7 @@ func validateToken(token string, publicKey *rsa.PublicKey) (*jwt.Token, error) {
 	return nil, err
 }
 
-func (c *Configurations) DefaultAuthFunction(ctx context.Context) (context.Context, error) {
+func (c *GrpcServerConfig) DefaultAuthFunction(ctx context.Context) (context.Context, error) {
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -151,7 +151,7 @@ func (c *Configurations) DefaultAuthFunction(ctx context.Context) (context.Conte
 		return nil, ErrUnauthenticated("Authorization header not present")
 	}
 
-	token, err := validateToken(jwtToken[0], c.ServerConfig.PubKey)
+	token, err := validateToken(jwtToken[0], c.PubKey)
 	if err != nil {
 		return nil, ErrUnauthenticated("Invalid token")
 	}
@@ -160,44 +160,40 @@ func (c *Configurations) DefaultAuthFunction(ctx context.Context) (context.Conte
 	return newCtx, nil
 }
 
-func (c *Configurations) WithAuthFunc(auth func (context.Context) (context.Context, error)) {
+func (c *GrpcServerConfig) WithAuthFunc(auth func (context.Context) (context.Context, error)) {
 
-	if !c.ServerConfig.UseJwt {
+	if !c.UseJwt {
 		log.Fatal("Public key file not specified in config.")
 	}
 
 	var err error
-	c.ServerConfig.PubKey, err = ParseJWTpubKeyFile(c.ServerConfig.PubKeyFile)
+	c.PubKey, err = ParseJWTpubKeyFile(c.PubKeyFile)
 	if err != nil {
 		log.Fatalf("Failed parsing public key.ERR:%s\n", err)
 	}
 
-	c.ServerConfig.auth_func = auth
-	c.ServerConfig.auth_func_set = true
+	c.auth_func = auth
+	c.auth_func_set = true
 }
 
-func (c *Configurations) withDefaultAuthFunc() {
-
-	if !c.ServerConfig.UseJwt {
-		log.Fatal("Public key file not specified in config.")
-	}
+func (c *GrpcServerConfig) withDefaultAuthFunc() {
 
 	var err error
-	c.ServerConfig.PubKey, err = ParseJWTpubKeyFile(c.ServerConfig.PubKeyFile)
+	c.PubKey, err = ParseJWTpubKeyFile(c.PubKeyFile)
 	if err != nil {
 		log.Fatalf("Failed parsing public key.ERR:%s\n", err)
 	}
 
-	c.ServerConfig.auth_func = c.DefaultAuthFunction
-	c.ServerConfig.auth_func_set = true
+	c.auth_func = c.DefaultAuthFunction
+	c.auth_func_set = true
 }
 
-func (c *Configurations) GetServerOpts() ([]grpc.ServerOption, error) {
+func (c *GrpcServerConfig) GetServerOpts() ([]grpc.ServerOption, error) {
 
 	var opts []grpc.ServerOption
 
-	if c.ServerConfig.UseTls {
-		creds, err := credentials.NewServerTLSFromFile(c.ServerConfig.CertFile, c.ServerConfig.KeyFile)
+	if c.UseTls {
+		creds, err := credentials.NewServerTLSFromFile(c.CertFile, c.KeyFile)
 		if err != nil {
 			log.Printf("Failed creating TLS credentials.ERR:%s\n", err)
 			return opts, err
@@ -206,40 +202,21 @@ func (c *Configurations) GetServerOpts() ([]grpc.ServerOption, error) {
 		opts = append(opts, grpc.Creds(creds))
 	}
 
-	if c.ServerConfig.UseJwt {
-		if !c.ServerConfig.auth_func_set {
+	if c.UseJwt {
+		if !c.auth_func_set {
 			c.withDefaultAuthFunc()
 		}
-		opts = append(opts, grpc.UnaryInterceptor(grpc_auth.UnaryServerInterceptor(c.ServerConfig.auth_func)))
-		opts = append(opts, grpc.StreamInterceptor(grpc_auth.StreamServerInterceptor(c.ServerConfig.auth_func)))
+		opts = append(opts, grpc.UnaryInterceptor(grpc_auth.UnaryServerInterceptor(c.auth_func)))
+		opts = append(opts, grpc.StreamInterceptor(grpc_auth.StreamServerInterceptor(c.auth_func)))
 
 	}
 
-	if c.ServerConfig.UseValidator {
+	if c.UseValidator {
 		opts = append(opts, grpc.StreamInterceptor(grpc_validator.StreamServerInterceptor()))
 		opts = append(opts, grpc.UnaryInterceptor(grpc_validator.UnaryServerInterceptor()))
 	}
 
 	return opts, nil
-}
-
-func (c *Configurations) WithJWTToken(token string) {
-
-	if c.ClientConfig == nil {
-		log.Fatal("Grpc Client config not specified.")
-	}
-
-	token_set := false
-	for i := range c.ClientConfig {
-		if c.ClientConfig[i].UseJwt {
-			c.ClientConfig[i].JwtToken = token
-			token_set = true
-		}
-	}
-
-	if !token_set {
-		log.Fatal("No client with JWT enabled.")
-	}
 }
 
 type JwtCredentials struct {
@@ -275,6 +252,12 @@ func (c *GrpcClientConfig) NewRPCConn() (*grpc.ClientConn, error) {
 	if err != nil {
 		log.Printf("Failed to get client options. ERR:%s\n", err.Error())
 		return nil, err
+	}
+
+	if len(opts) == 0 {
+		opts = []grpc.DialOption{
+			grpc.WithInsecure(),
+		}
 	}
 
 	conn, err := grpc.Dial(c.ServerAddr, opts...)

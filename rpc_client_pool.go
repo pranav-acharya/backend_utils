@@ -67,10 +67,7 @@ func (r *RpcClientPool) createPool(endpoints []interface{}, conn_per_ep int) err
 
 func (r *RpcClientPool) newRPCConn(ep interface{}) (*grpc.ClientConn, error) {
 
-	var (
-		opts []grpc.DialOption
-		cli *GrpcClientConfig
-	)
+	var cli *GrpcClientConfig
 
 	switch ep.(type) {
 	case ConnEndpointInfo:
@@ -92,12 +89,7 @@ func (r *RpcClientPool) newRPCConn(ep interface{}) (*grpc.ClientConn, error) {
 		break
 	}
 
-	opts, err := cli.GetClientOpts()
-	if err != nil {
-		r.elog.Printf("Failed to get client options. ERR:%s\n", err.Error())
-	}
-
-	conn, err := grpc.Dial(cli.ServerAddr, opts...)
+	conn, err := cli.NewRPCConn()
 	if err != nil {
 		r.elog.Printf("Failed to dial. ERR:%s\n", err.Error())
 		return nil, err
