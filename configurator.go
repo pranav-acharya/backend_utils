@@ -254,10 +254,8 @@ func (c *GrpcClientConfig) NewRPCConn() (*grpc.ClientConn, error) {
 		return nil, err
 	}
 
-	if len(opts) == 0 {
-		opts = []grpc.DialOption{
-			grpc.WithInsecure(),
-		}
+	if !c.UseTls {
+		opts = append(opts, grpc.WithInsecure())
 	}
 
 	conn, err := grpc.Dial(c.ServerAddr, opts...)
