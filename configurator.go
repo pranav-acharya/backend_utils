@@ -42,7 +42,8 @@ type GrpcServerConfig struct {
 }
 
 type GrpcClientConfig struct {
-
+	// Name of the service for which client config is.
+	SvcName			string  `json:"svc_name"`
 	// Use TLS for encryption
 	UseTls 			bool	`json:"use_tls"`
 	CertFile 		string	`json:"cert_file"`
@@ -54,6 +55,7 @@ type GrpcClientConfig struct {
 
 	// Non-json fields
 	JwtToken		string
+	pool			*RpcClientPool
 }
 
 type PostgresDBConfig struct {
@@ -69,12 +71,29 @@ type EmailerConfig struct {
 	Password	string	`json:"password"`
 }
 
+type DumbDBConfig struct {
+	DBName		string	`json:"db_name"`
+	DBPath		string	`json:"db_path"`
+}
+
+type ZookeeperLocker struct {
+	Address 	[]string `json:"address"`
+}
+
+type FsConfig struct {
+	RootPath 	string `json:"root_path"`
+}
+
 type Configurations struct {
 	ServerConfig	GrpcServerConfig 	`json:"server_config"`
 	ClientConfig 	[]GrpcClientConfig	`json:"client_config"`
 	PostgresDB	PostgresDBConfig	`json:"postgres_db"`
+	DumbDB 		DumbDBConfig		`json:"dumb_db"`
 	Emailer		EmailerConfig		`json:"emailer"`
-	AuthConfig 	GrpcClientConfig	`json:"auth_config"`
+	LockerConfig	ZookeeperLocker		`json:"locker_config"`
+	FileStoreConfig FsConfig		`json:"fs_config"`
+	//Non-json fields.
+	client_map	map[string] *RpcClientPool
 }
 
 func ReadConfFile(file_path string) (*Configurations, error) {
@@ -137,6 +156,61 @@ func validateToken(token string, publicKey *rsa.PublicKey) (*jwt.Token, error) {
 		return jwtToken, nil
 	}
 	return nil, err
+}
+
+func (c *Configurations) GetClientConfig(svc_name string) *GrpcClientConfig {
+	for i := range c.ClientConfig {
+		if c.ClientConfig[i].SvcName == svc_name {
+			return &c.ClientConfig[i]
+		}
+	}
+	return nil
+}
+
+func (c *Configurations) CreateClientPool(heartbeat_map map[string] func(*grpc.ClientConn) error, conn_per_ep int) error {
+
+	ep_map := make(map[string] []interface{}, 1)
+
+	for i := range c.ClientConfig {
+		if val, ok := ep_map[c.ClientConfig[i].SvcName]; ok {
+			val = append(val, c.ClientConfig[i])
+		} else {
+			ep_map[c.ClientConfig[i].SvcName] = []interface{}{c.ClientConfig[i]}
+		}
+	}
+
+	c.client_map = make(map[string] *RpcClientPool, len(ep_map))
+
+	for k,v := range ep_map {
+		val, ok := heartbeat_map[k]
+		if !ok {
+			return errors.New("Heartbeat function missing for Service " + k)
+		}
+		c.client_map[k] = NewRpcClientPool(val, v, conn_per_ep, os.Stdout)
+		if c.client_map[k] == nil {
+			return errors.New("Failed to create conn pool for Service " + k)
+		}
+	}
+	return nil
+}
+
+func (c *Configurations) GetPooledConn(svc_name string) *grpc.ClientConn {
+	val, ok := c.client_map[svc_name]
+	if !ok {
+		return nil
+	}
+	if !val.pool_created {
+		return nil
+	}
+	return val.Get()
+}
+
+func (c *Configurations) PooledConnDone(svc_name string, conn *grpc.ClientConn) {
+	val, ok := c.client_map[svc_name]
+	if !ok {
+		panic("unexpected connection returned to pool.")
+	}
+	val.Put(conn)
 }
 
 func (c *GrpcServerConfig) DefaultAuthFunction(ctx context.Context) (context.Context, error) {
@@ -299,6 +373,27 @@ func (c *GrpcClientConfig) GetClientOpts() ([]grpc.DialOption, error) {
 	}
 
 	return opts, nil
+}
+
+// Single client conn pool needs to be synchronized externally.
+func (c *GrpcClientConfig) CreatePool(no_of_conn int, do_heartbeat func(*grpc.ClientConn) error) error {
+
+	c.pool = NewRpcClientPool(do_heartbeat, []interface{}{c,}, no_of_conn, os.Stdout)
+	if c.pool == nil {
+		return errors.New("Failed to create pool")
+	}
+	return nil
+}
+
+func (c *GrpcClientConfig) GetPooledConn() *grpc.ClientConn {
+	if ! c.pool.pool_created {
+		panic("Pool has not been initialized yet.")
+	}
+	return c.pool.Get()
+}
+
+func (c *GrpcClientConfig) GiveupPooledConn(conn *grpc.ClientConn) {
+	c.pool.Put(conn)
 }
 
 func (dbConf *PostgresDBConfig) OpenDB() (*sql.DB, error) {
