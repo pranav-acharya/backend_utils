@@ -16,6 +16,9 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/auth"
 	"database/sql"
 	"errors"
+	"github.com/grpc-ecosystem/go-grpc-middleware/recovery"
+	"github.com/grpc-ecosystem/go-grpc-middleware"
+	"runtime/debug"
 )
 
 type GrpcServerConfig struct {
@@ -31,6 +34,7 @@ type GrpcServerConfig struct {
 	PrivKeyFile	string	`json:"priv_key"`
 
 	UseValidator	bool	`json:"use_validator"`
+	UseRecovery	bool	`json:"use_recovery"`
 	Port		int32	`json:"port"`
 	LogLevel	int32	`json:"log_level"`
 
@@ -39,6 +43,8 @@ type GrpcServerConfig struct {
 	PrivKey		*rsa.PrivateKey
 	auth_func_set	bool
 	auth_func 	func (context.Context) (context.Context, error)
+	recv_func_set	bool
+	recv_func 	grpc_recovery.RecoveryHandlerFunc
 }
 
 type GrpcClientConfig struct {
@@ -84,6 +90,11 @@ type FsConfig struct {
 	RootPath 	string `json:"root_path"`
 }
 
+type ProxyConfig struct {
+	Endpoint	string	`json:"endpoint"`
+	Port		string	`json:"port"`
+}
+
 type Configurations struct {
 	ServerConfig	GrpcServerConfig 	`json:"server_config"`
 	ClientConfig 	[]GrpcClientConfig	`json:"client_config"`
@@ -92,6 +103,7 @@ type Configurations struct {
 	Emailer		EmailerConfig		`json:"emailer"`
 	LockerConfig	ZookeeperLocker		`json:"locker_config"`
 	FileStoreConfig FsConfig		`json:"fs_config"`
+	Proxy 		ProxyConfig		`json:"proxy_config"`
 	//Non-json fields.
 	client_map	map[string] *RpcClientPool
 }
@@ -234,6 +246,19 @@ func (c *GrpcServerConfig) DefaultAuthFunction(ctx context.Context) (context.Con
 	return newCtx, nil
 }
 
+func DefaultRecovery(arg interface{}) (ret_err error) {
+	debug.PrintStack()
+
+	switch arg.(type) {
+	case string:
+		ret_err = ErrInternal(arg.(string))
+	default:
+		ret_err = ErrUnknown("Server encountered unknown error.")
+	}
+	log.Println("Service Recovery handler. Returning error:" + ret_err.Error())
+	return
+}
+
 func (c *GrpcServerConfig) WithAuthFunc(auth func (context.Context) (context.Context, error)) {
 
 	if !c.UseJwt {
@@ -262,6 +287,21 @@ func (c *GrpcServerConfig) withDefaultAuthFunc() {
 	c.auth_func_set = true
 }
 
+func (c *GrpcServerConfig) WithRecvFunc(recv grpc_recovery.RecoveryHandlerFunc) {
+
+	if !c.UseRecovery {
+		log.Fatal("Use of recovery not specified in config.")
+	}
+
+	c.recv_func = recv
+	c.recv_func_set = true
+}
+
+func (c *GrpcServerConfig) withDefaultRecvFunc() {
+	c.recv_func = DefaultRecovery
+	c.recv_func_set = true
+}
+
 func (c *GrpcServerConfig) GetServerOpts() ([]grpc.ServerOption, error) {
 
 	var opts []grpc.ServerOption
@@ -276,21 +316,52 @@ func (c *GrpcServerConfig) GetServerOpts() ([]grpc.ServerOption, error) {
 		opts = append(opts, grpc.Creds(creds))
 	}
 
+	var u_interceptors []grpc.UnaryServerInterceptor
+	var s_interceptors []grpc.StreamServerInterceptor
+
 	if c.UseJwt {
 		if !c.auth_func_set {
 			c.withDefaultAuthFunc()
 		}
-		opts = append(opts, grpc.UnaryInterceptor(grpc_auth.UnaryServerInterceptor(c.auth_func)))
-		opts = append(opts, grpc.StreamInterceptor(grpc_auth.StreamServerInterceptor(c.auth_func)))
+		u_interceptors = append(u_interceptors, grpc_auth.UnaryServerInterceptor(c.auth_func))
+		s_interceptors = append(s_interceptors, grpc_auth.StreamServerInterceptor(c.auth_func))
 
 	}
 
 	if c.UseValidator {
-		opts = append(opts, grpc.StreamInterceptor(grpc_validator.StreamServerInterceptor()))
-		opts = append(opts, grpc.UnaryInterceptor(grpc_validator.UnaryServerInterceptor()))
+		u_interceptors = append(u_interceptors, grpc_validator.UnaryServerInterceptor())
+		s_interceptors = append(s_interceptors, grpc_validator.StreamServerInterceptor())
 	}
 
+	if c.UseRecovery {
+		if !c.recv_func_set {
+			c.withDefaultRecvFunc()
+		}
+		u_interceptors = append(u_interceptors, grpc_recovery.UnaryServerInterceptor(
+									grpc_recovery.WithRecoveryHandler(c.recv_func)))
+		s_interceptors = append(s_interceptors, grpc_recovery.StreamServerInterceptor(
+									grpc_recovery.WithRecoveryHandler(c.recv_func)))
+	}
+
+	opts = append(opts, grpc_middleware.WithUnaryServerChain(u_interceptors...))
+	opts = append(opts, grpc_middleware.WithStreamServerChain(s_interceptors...))
+
 	return opts, nil
+}
+
+func (c *GrpcServerConfig) Valid() bool {
+	if c.Port == 0 {
+		return false;
+	}
+	if ! (c.LogLevel > 0) {
+		return false;
+	}
+	if c.UseJwt {
+		if c.PrivKey == nil || c.PubKey == nil {
+			return false;
+		}
+	}
+	return true;
 }
 
 type JwtCredentials struct {
@@ -435,4 +506,14 @@ func (dbConf *PostgresDBConfig) CreatePQDB() (*sql.DB, error) {
 	}
 
 	return dbConf.OpenDB()
+}
+
+func (c *ProxyConfig) Valid() bool {
+	if len(c.Endpoint) == 0 {
+		return false
+	}
+	if len(c.Port) == 0 {
+		return false;
+	}
+	return true;
 }
