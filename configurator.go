@@ -357,7 +357,7 @@ func (c *GrpcServerConfig) Valid() bool {
 		return false;
 	}
 	if c.UseJwt {
-		if c.PrivKey == nil || c.PubKey == nil {
+		if len(c.PubKeyFile) == 0 {
 			return false;
 		}
 	}
