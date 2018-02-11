@@ -65,6 +65,8 @@ type GrpcClientConfig struct {
 }
 
 type PostgresDBConfig struct {
+	Hostname	string	`json:"hostname"`
+	Port		int	`json:"port"`
 	Username	string	`json:"username"`
 	Password	string	`json:"password"`
 	DBName		string	`json:"db_name"`
@@ -469,8 +471,10 @@ func (c *GrpcClientConfig) GiveupPooledConn(conn *grpc.ClientConn) {
 
 func (dbConf *PostgresDBConfig) OpenDB() (*sql.DB, error) {
 
-	dbP, err := sql.Open("postgres", "user=" + dbConf.Username + " dbname=" + dbConf.DBName +
-			     " sslmode=disable")
+	open_str := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		dbConf.Hostname, dbConf.Port, dbConf.Username, dbConf.Password, dbConf.DBName)
+
+	dbP, err := sql.Open("postgres", open_str)
 	if err == nil {
 		// Open doesn't really do anything. Ping is where we will know.
 		err = dbP.Ping()
@@ -480,6 +484,8 @@ func (dbConf *PostgresDBConfig) OpenDB() (*sql.DB, error) {
 		log.Printf("Failed opening DB Err:%s", err.Error())
 		return nil, err
 	}
+
+	log.Printf("Successfully connected to DB %s", dbConf.DBName)
 
 	return dbP, nil
 }
@@ -493,16 +499,33 @@ func (dbConf *PostgresDBConfig) CreatePQDB() (*sql.DB, error) {
 		return dbP, nil
 	}
 
-	cmd_result := ExecCommand("psql", "-U" + dbConf.Username, "-tc CREATE DATABASE " + dbConf.DBName)
-	if cmd_result.Err != nil {
-		log.Printf("Failed executing database create command Err:%s", cmd_result.Err.Error())
-		return nil, cmd_result.Err
+	// Connect to pq and create database.
+	open_str := fmt.Sprintf("host=%s port=%d user=%s password=%s sslmode=disable",
+		dbConf.Hostname, dbConf.Port, dbConf.Username, dbConf.Password)
+
+	dbP, err = sql.Open("postgres", open_str)
+	if err != nil {
+		log.Printf("Failed to open postgres. Open String:%s", open_str)
+		return nil, err
 	}
 
-	log.Printf("Database command result: OUT:%s ERR:%s", cmd_result.StdOut, cmd_result.StdErr)
-	if len(cmd_result.StdErr) > 0 {
-		log.Printf("Database create command retured error. %s", cmd_result.StdErr)
-		return nil, errors.New(cmd_result.StdErr)
+	err = dbP.Ping()
+	if err != nil {
+		log.Printf("Failed to ping postgres. Open String:%s", open_str)
+		return nil, err
+	}
+
+	_, err = dbP.Exec("CREATE DATABASE " + dbConf.DBName)
+	if err != nil {
+		log.Printf("Failed to create postgres database %s", dbConf.DBName)
+		return nil, err
+	}
+
+	// We need to make a new connection using the newly created database name.
+	err = dbP.Close()
+	if err != nil {
+		log.Println("Failed to close postgres db after creation.")
+		return nil, err
 	}
 
 	return dbConf.OpenDB()
