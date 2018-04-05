@@ -97,6 +97,13 @@ type ProxyConfig struct {
 	Port		string	`json:"port"`
 }
 
+type CDNHostInfo struct {
+	Hostname	string  `json:"hostname`
+	Port		string  `json:"port"`
+	BaseURL		string  `json:"base_url"`
+	Protocol	string	`json:"protocol"`
+}
+
 type Configurations struct {
 	ServerConfig	GrpcServerConfig 	`json:"server_config"`
 	ClientConfig 	[]GrpcClientConfig	`json:"client_config"`
