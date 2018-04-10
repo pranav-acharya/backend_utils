@@ -113,6 +113,7 @@ type Configurations struct {
 	LockerConfig	ZookeeperLocker		`json:"locker_config"`
 	FileStoreConfig FsConfig		`json:"fs_config"`
 	Proxy 		ProxyConfig		`json:"proxy_config"`
+	CDNInfo		CDNHostInfo		`json:"cdn_config"`
 	//Non-json fields.
 	client_map	map[string] *RpcClientPool
 }
